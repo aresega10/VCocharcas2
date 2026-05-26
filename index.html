@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <link rel="manifest" href="manifest.json?v=4">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Vcocharcas">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3643/3643914.png">
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Vcocharcas POS v4.9</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        @media print { body * { visibility: hidden; } #ticket-impresion, #ticket-impresion * { visibility: visible; } #ticket-impresion { position: absolute; left: 0; top: 0; width: 100%; display: block !important; } }
+        .ticket-font { font-family: 'Courier New', Courier, monospace; line-height: 1.2; }
+        .hide-scroll::-webkit-scrollbar { display: none; }
+        input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        #csvFile { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+    </style>
+</head>
+<body class="bg-gray-100 pb-32">
+
+    <input type="file" id="csvFile" accept=".csv, text/csv">
+
+    <div id="ticket-impresion" class="hidden p-4 ticket-font text-xs bg-white w-[280px] mx-auto border">
+        <div class="text-center mb-1">
+            <div class="font-black text-xl uppercase italic">VCOCHARCAS</div>
+            <p class="text-[9px] font-bold uppercase tracking-widest">S.M.P. - LIMA</p>
+        </div>
+        <div class="my-1 border-b border-black border-dashed"></div>
+        <div id="t-tipo-pago" class="font-bold text-center border border-black p-1 my-1 uppercase"></div>
+        <div class="space-y-1 text-[10px]">
+            <p>FECHA: <span id="t-fecha"></span></p>
+            <p>CLIENTE: <span id="t-cliente"></span></p>
+        </div>
+        <div class="my-2 border-b border-black border-dashed"></div>
+        <table class="w-full text-left text-[10px]">
+            <thead><tr class="border-b border-black"><th>CANT</th><th>PROD.</th><th class="text-right">TOTAL</th></tr></thead>
+            <tbody id="t-items-print"></tbody>
+        </table>
+        <div class="my-2 border-b border-black border-dashed"></div>
+        <div class="flex justify-between font-bold text-base"><span>TOTAL S/</span><span id="t-total"></span></div>
+        <div class="text-center mt-6 uppercase text-[9px] font-black italic">Gracias por su compra</div>
+    </div>
+
+    <nav class="bg-blue-900 text-white p-4 sticky top-0 z-50 shadow-md">
+        <div class="flex justify-between items-center max-w-lg mx-auto">
+            <h1 class="text-xl font-bold italic tracking-tighter uppercase">Vcocharcas</h1>
+            <div class="text-right"><p id="nav-balance" class="font-black text-lg text-green-400 leading-none">S/ 0.00</p></div>
+        </div>
+    </nav>
+
+    <main class="max-w-lg mx-auto p-4 space-y-6" id="app-content"></main>
+
+    <footer class="fixed bottom-0 left-0 right-0 bg-white border-t flex justify-around py-3 text-gray-400 shadow-2xl z-50">
+        <button onclick="renderDashboard()" class="flex flex-col items-center flex-1 text-xs"><i class="fas fa-home"></i><span>Caja</span></button>
+        <button onclick="renderInventario()" class="flex flex-col items-center flex-1 text-xs"><i class="fas fa-box"></i><span>Stock</span></button>
+        <button onclick="renderVenta()" class="flex flex-col items-center flex-1"><div class="bg-blue-600 text-white p-4 rounded-full -mt-10 shadow-lg border-4 border-gray-100"><i class="fas fa-shopping-cart"></i></div><span class="text-[10px] font-bold uppercase">Venta</span></button>
+        <button onclick="renderDeudas()" class="flex flex-col items-center flex-1 text-xs"><i class="fas fa-hand-holding-usd"></i><span>Fiados</span></button>
+        <button onclick="renderAdmin()" class="flex flex-col items-center flex-1 text-xs"><i class="fas fa-file-excel"></i><span>Admin</span></button>
+    </footer>
+
+    <script>
+        let db = JSON.parse(localStorage.getItem('vco_db')) || { transacciones: [], productos: [], deudas: [], categorias: ['General', 'Bebidas', 'Abarrotes', 'Limpieza', 'Golosinas'] };
+        let carrito = [];
+        let filtroCat = 'Todos';
+
+        const escapeHTML = (str) => String(str).replace(/[&<>'"]/g, tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag));
+
+        const save = () => { localStorage.setItem('vco_db', JSON.stringify(db)); updateNav(); };
+        const updateNav = () => {
+            const ingresos = db.transacciones.filter(t => (t.tipo === 'Venta' && t.metodo === 'Contado') || t.tipo === 'Cobro Fiado').reduce((a, b) => a + (Number(b.monto) || 0), 0);
+            document.getElementById('nav-balance').innerText = 'S/ ' + ingresos.toFixed(2);
+        };
+
+        function renderDashboard() {
+            const transHoy = db.transacciones.filter(t => (t.tipo === 'Venta' && t.metodo === 'Contado') || t.tipo === 'Cobro Fiado');
+            const ingresos = transHoy.reduce((a, b) => a + (Number(b.monto) || 0), 0);
+            const utilidad = transHoy.reduce((a, b) => a + (Number(b.utilidad) || 0), 0);
+            document.getElementById('app-content').innerHTML = `
+                <div class="space-y-4">
+                    <div class="bg-white p-10 rounded-3xl shadow-lg text-center border-b-8 border-green-500">
+                        <p class="text-[10px] text-gray-400 uppercase font-black tracking-widest">Efectivo Total</p>
+                        <h1 class="text-5xl font-black text-blue-900 mt-2">S/ ${ingresos.toFixed(2)}</h1>
+                    </div>
+                    <div class="bg-blue-900 p-6 rounded-3xl text-center text-white shadow-xl">
+                        <p class="text-[10px] uppercase font-bold opacity-60">Ganancia Neta Estimada</p>
+                        <h2 class="text-3xl font-black text-green-400 tracking-tighter uppercase italic">S/ ${utilidad.toFixed(2)}</h2>
+                    </div>
+                </div>`;
+        }
+
+        function renderInventario() {
+            const catOpts = db.categorias.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
+            document.getElementById('app-content').innerHTML = `
+                <div class="bg-white p-5 rounded-2xl shadow mb-4">
+                    <h3 class="font-bold text-xs text-gray-400 uppercase mb-3 border-b pb-1">Nuevo Producto</h3>
+                    <input type="text" id="p-n" placeholder="Nombre" class="w-full p-2 border mb-2 rounded-xl text-sm">
+                    <select id="p-cat" class="w-full p-2 border mb-2 rounded-xl text-sm bg-gray-50">${catOpts}</select>
+                    <div class="grid grid-cols-3 gap-2">
+                        <input type="number" id="p-c" placeholder="Costo" class="w-full p-2 border rounded-xl text-xs">
+                        <input type="number" id="p-v" placeholder="Venta" class="w-full p-2 border rounded-xl text-xs font-bold text-blue-600">
+                        <input type="number" id="p-s" placeholder="Stock" class="w-full p-2 border rounded-xl text-xs">
+                    </div>
+                    <button onclick="addP()" class="w-full bg-blue-700 text-white mt-4 p-3 rounded-xl font-bold uppercase shadow">Guardar</button>
+                </div>
+                
+                <div class="mb-4">
+                    <input type="text" id="search-stock" oninput="filtrarStock()" placeholder="🔍 Buscar producto existente..." class="w-full p-3 border-2 border-blue-200 rounded-xl text-sm font-bold bg-white focus:outline-none focus:border-blue-500 transition-colors">
+                </div>
+
+                <div class="space-y-2" id="lista-inventario">
+                    ${db.productos.map((p, i) => `
+                        <div class="prod-item bg-white p-3 rounded-xl flex justify-between items-center shadow-sm border-l-4 border-blue-900">
+                            <div class="flex-1">
+                                <b class="text-sm uppercase prod-nombre">${escapeHTML(p.nombre || 'SIN NOMBRE')}</b> 
+                                <span class="text-[9px] bg-gray-100 px-1 rounded text-gray-400">${escapeHTML(p.cat || 'Gral')}</span><br>
+                                <small class="text-gray-400 font-bold">Vta: S/ ${p.precio} | Cost: S/ ${p.costo || 0} | Stock: ${p.stock}</small>
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="editP(${i})" class="text-blue-500 p-2"><i class="fas fa-edit"></i></button>
+                                <button onclick="if(confirm('¿Eliminar?')) {db.productos.splice(${i},1);save();renderInventario()}" class="text-red-300 p-2"><i class="fas fa-trash"></i></button>
+                            </div>
+                        </div>`).join('')}
+                </div>`;
+        }
+
+        function filtrarStock() {
+            const input = document.getElementById('search-stock');
+            if (!input) return; 
+            const filtro = input.value.toLowerCase();
+            const items = document.querySelectorAll('.prod-item');
+            
+            items.forEach(item => {
+                const elementoNombre = item.querySelector('.prod-nombre');
+                const nombreTexto = elementoNombre ? String(elementoNombre.textContent).toLowerCase() : '';
+                item.style.display = nombreTexto.includes(filtro) ? 'flex' : 'none';
+            });
+        }
+
+        function editP(index) {
+            const p = db.productos[index];
+            const nNombre = prompt("Nombre:", p.nombre);
+            if (nNombre === null) return;
+            const nCosto = prompt("Costo:", p.costo);
+            const nPrecio = prompt("Precio Venta:", p.precio);
+            const nStock = prompt("Stock:", p.stock);
+            if (nNombre.trim() !== '') p.nombre = nNombre.trim();
+            if (!isNaN(parseFloat(nCosto))) p.costo = parseFloat(nCosto);
+            if (!isNaN(parseFloat(nPrecio))) p.precio = parseFloat(nPrecio);
+            if (!isNaN(parseInt(nStock))) p.stock = parseInt(nStock);
+            save();
+            renderInventario();
+        }
+
+        function addP() {
+            const n = document.getElementById('p-n').value.trim(), 
+                  v = parseFloat(document.getElementById('p-v').value), 
+                  c = parseFloat(document.getElementById('p-c').value) || 0, 
+                  s = parseInt(document.getElementById('p-s').value) || 0, 
+                  cat = document.getElementById('p-cat').value;
+            if (n && !isNaN(v)) { db.productos.push({ nombre: n, precio: v, costo: c, stock: s, cat: cat }); save(); renderInventario(); }
+        }
+
+        function renderVenta() {
+            const cats = ['Todos', ...db.categorias];
+            const catFiltros = cats.map(c => `<button onclick="filtroCat='${escapeHTML(c)}';renderVenta()" class="px-4 py-2 rounded-full text-[10px] font-bold uppercase whitespace-nowrap ${filtroCat === c ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-gray-500 border'}">${escapeHTML(c)}</button>`).join('');
+            const prodFiltrados = filtroCat === 'Todos' ? db.productos : db.productos.filter(p => p.cat === filtroCat);
+            const opts = prodFiltrados.map(p => `<option value="${escapeHTML(p.nombre)}">`).join('');
+            
+            document.getElementById('app-content').innerHTML = `
+                <div class="flex gap-2 overflow-x-auto pb-2 hide-scroll">${catFiltros}</div>
+                <div class="bg-white p-5 rounded-3xl shadow-xl space-y-4">
+                    <input list="list-p" id="v-d" onchange="aP()" placeholder="Buscar..." class="w-full p-4 border rounded-xl bg-gray-50 font-bold text-lg">
+                    <datalist id="list-p">${opts}</datalist>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div class="text-center"><label class="text-[9px] uppercase font-bold text-gray-400">Cant.</label><input type="number" id="v-c" value="1" class="w-full p-3 border rounded-xl text-center font-bold"></div>
+                        <div class="text-center"><label class="text-[9px] uppercase font-bold text-gray-400">Precio S/</label><input type="number" id="v-p" class="w-full p-3 border rounded-xl font-bold text-blue-700 text-center"></div>
+                    </div>
+                    <button onclick="addC()" class="w-full bg-blue-100 text-blue-800 py-4 rounded-xl font-black uppercase shadow-sm">+ AGREGAR AL CARRITO</button>
+                    <div id="c-list" class="space-y-1 text-sm pt-2"></div>
+                    <div class="p-5 bg-blue-900 text-white rounded-2xl flex justify-between items-center shadow-inner">
+                        <span class="text-xs uppercase font-black opacity-70">Total</span><span id="c-tot" class="text-3xl font-black">S/ 0.00</span>
+                    </div>
+                    <div class="space-y-2">
+                        <input type="text" id="v-cli" placeholder="Nombre del cliente" class="w-full p-3 border rounded-xl text-sm italic">
+                        <input type="number" id="v-tel" placeholder="WhatsApp (9 dígitos)" class="w-full p-3 border rounded-xl text-sm italic">
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <button onclick="finish('Contado')" class="bg-green-600 text-white py-5 rounded-2xl font-black shadow-lg text-lg">EFECTIVO</button>
+                        <button onclick="finish('Fíado')" class="bg-orange-500 text-white py-5 rounded-2xl font-black shadow-lg italic text-lg">FÍADO</button>
+                    </div>
+                </div>`;
+            upC();
+        }
+
+        function aP() { 
+            const val = document.getElementById('v-d').value;
+            const x = db.productos.find(p => p.nombre === val); 
+            if (x) document.getElementById('v-p').value = x.precio; 
+        }
+        
+        function addC() {
+            const d = document.getElementById('v-d').value, c = parseInt(document.getElementById('v-c').value), p = parseFloat(document.getElementById('v-p').value);
+            const ori = db.productos.find(x => x.nombre === d);
+            const cost = ori ? Number(ori.costo || 0) : 0;
+            if (d && c > 0) { carrito.push({ d, c, p, st: c * p, ut: (p - cost) * c }); upC(); document.getElementById('v-d').value = ''; document.getElementById('v-c').value = '1'; }
+        }
+
+        function upC() {
+            const l = document.getElementById('c-list'); if (!l) return;
+            l.innerHTML = carrito.map((x, i) => `<div class="flex justify-between border-b py-3 items-center"><div><b class="text-blue-900">${x.c}x</b> ${escapeHTML(x.d)}</div><div class="flex items-center"><b>S/ ${x.st.toFixed(2)}</b><button onclick="carrito.splice(${i},1);upC()" class="ml-3 text-red-300"><i class="fas fa-times-circle"></i></button></div></div>`).join('');
+            document.getElementById('c-tot').innerText = 'S/ ' + carrito.reduce((a, b) => a + b.st, 0).toFixed(2);
+        }
+
+        function finish(m) {
+            if (carrito.length === 0) return alert("Carrito vacío");
+            const cli = document.getElementById('v-cli').value || "Venta General";
+            const tel = document.getElementById('v-tel').value || "";
+            const totV = carrito.reduce((a, b) => a + b.st, 0), totU = carrito.reduce((a, b) => a + b.ut, 0);
+            carrito.forEach(item => { const p = db.productos.find(x => x.nombre === item.d); if (p) p.stock -= item.c; });
+            db.transacciones.push({ f: new Date().toLocaleString(), monto: totV, utilidad: totU, tipo: 'Venta', metodo: m, cli: cli });
+            if (m === 'Fíado') db.deudas.push({ cli, tel, monto: totV, utilidad: totU, f: new Date().toLocaleDateString(), detalle: carrito.map(x => `${x.c} ${x.d}`).join(', ') });
+            document.getElementById('t-fecha').innerText = new Date().toLocaleString();
+            document.getElementById('t-tipo-pago').innerText = m.toUpperCase();
+            document.getElementById('t-cliente').innerText = escapeHTML(cli);
+            document.getElementById('t-total').innerText = totV.toFixed(2);
+            document.getElementById('t-items-print').innerHTML = carrito.map(x => `<tr><td>${x.c}</td><td>${escapeHTML(x.d)}</td><td class="text-right">${x.st.toFixed(2)}</td></tr>`).join('');
+            save(); window.print();
+            carrito = []; renderDashboard();
+        }
+
+        function renderDeudas() {
+            const app = document.getElementById('app-content');
+            app.innerHTML = `<h2 class="font-black text-orange-600 mb-4 uppercase text-center italic">Cobros Pendientes</h2>`;
+            if (db.deudas.length === 0) app.innerHTML += `<div class="bg-white p-10 rounded-3xl text-center text-gray-300 font-bold uppercase text-xs shadow-inner">Sin deudas</div>`;
+            else {
+                db.deudas.forEach((d, i) => {
+                    app.innerHTML += `
+                    <div class="bg-white p-5 rounded-2xl border-l-8 border-orange-500 mb-3 shadow">
+                        <div class="flex justify-between items-start">
+                            <div><p class="font-black text-blue-900 uppercase text-sm">${escapeHTML(d.cli)}</p><small class="text-gray-400 font-bold">${d.f}</small><p class="text-[10px] text-gray-500 italic mt-1">${escapeHTML(d.detalle)}</p></div>
+                            <div class="text-right"><p class="text-xl font-black text-orange-600 leading-none">S/ ${d.monto.toFixed(2)}</p></div>
+                        </div>
+                        <div class="flex gap-2 mt-4">
+                            <button onclick="cobrar(${i})" class="flex-1 bg-green-600 text-white py-2 rounded-xl text-[10px] font-black uppercase shadow">Pagado</button>
+                            ${d.tel ? `<button onclick="window.open('https://wa.me/51${d.tel}?text='+encodeURIComponent('Hola ${d.cli}, tienes una cuenta pendiente de S/ ${d.monto.toFixed(2)} por: ${d.detalle}.'), '_blank')" class="bg-green-100 text-green-600 px-4 py-2 rounded-xl border border-green-200"><i class="fab fa-whatsapp"></i></button>` : ''}
+                        </div>
+                    </div>`;
+                });
+            }
+        }
+
+        function cobrar(i) {
+            const d = db.deudas[i];
+            db.transacciones.push({ f: new Date().toLocaleString(), monto: d.monto, utilidad: d.utilidad || 0, tipo: 'Cobro Fiado', cli: d.cli, metodo: 'Contado' });
+            db.deudas.splice(i, 1);
+            save(); renderDeudas();
+        }
+
+        function renderAdmin() {
+            document.getElementById('app-content').innerHTML = `
+                <div class="space-y-4">
+                    <div class="bg-white p-6 rounded-3xl shadow-lg">
+                        <h3 class="font-black border-b pb-2 uppercase text-[10px] text-blue-900 mb-4">Exportar Reportes</h3>
+                        <div class="grid grid-cols-2 gap-3">
+                            <button onclick="exp('v')" class="bg-blue-50 text-blue-700 p-4 rounded-xl font-black text-[9px] uppercase"><i class="fas fa-file-invoice-dollar block text-xl mb-1"></i>Ventas</button>
+                            <button onclick="exp('s')" class="bg-green-50 text-green-700 p-4 rounded-xl font-black text-[9px] uppercase"><i class="fas fa-boxes block text-xl mb-1"></i>Stock</button>
+                        </div>
+                    </div>
+
+                    <div class="bg-white p-6 rounded-3xl shadow-lg">
+                        <h3 class="font-black border-b pb-2 uppercase text-[10px] text-blue-900 mb-4">Cargar Stock (CSV)</h3>
+                        <p class="text-[9px] text-gray-400 mb-2 font-bold">Instrucciones:</p>
+                        <p class="text-[9px] text-gray-400 mb-4">El CSV debe tener: <br><b>Nombre, Costo, Precio, Stock, Categoria</b></p>
+                        
+                        <select id="csv-encoding" class="w-full p-3 border-2 border-blue-200 rounded-xl text-xs mb-3 bg-gray-50 font-bold text-gray-600 outline-none focus:border-blue-500">
+                            <option value="UTF-8">Formato: UTF-8 (Excel Moderno / Normal)</option>
+                            <option value="ISO-8859-1">Formato: ANSI (Excel Antiguo / Muestra caracteres raros)</option>
+                        </select>
+
+                        <button onclick="document.getElementById('csvFile').click()" class="w-full bg-blue-50 border-2 border-blue-200 text-blue-700 p-6 rounded-2xl font-black uppercase text-xs mb-3 flex flex-col items-center">
+                            <i class="fas fa-file-csv text-3xl mb-2"></i>
+                            Seleccionar Archivo
+                        </button>
+                        
+                        <div id="file-info" class="text-[10px] text-center text-green-600 font-bold mb-3 hidden uppercase">Archivo seleccionado</div>
+                        
+                        <button onclick="imp()" id="btn-import" class="w-full bg-blue-900 text-white p-4 rounded-2xl font-black uppercase text-xs shadow-md opacity-50 cursor-not-allowed" disabled>Cargar a la Base de Datos</button>
+                    </div>
+
+                    <button onclick="if(confirm('¿BORRAR TODO?')){localStorage.clear();location.reload();}" class="w-full bg-red-50 text-red-500 p-4 rounded-2xl font-bold uppercase text-[10px]">Borrar Base de Datos</button>
+                </div>`;
+        }
+
+        document.addEventListener('change', (e) => {
+            if (e.target.id === 'csvFile') {
+                const btn = document.getElementById('btn-import');
+                const info = document.getElementById('file-info');
+                if (e.target.files.length > 0) {
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-50', 'cursor-not-allowed');
+                    if(info) info.classList.remove('hidden');
+                }
+            }
+        });
+
+        function exp(t) {
+            let c = (t === 'v') ? "Fecha,Cliente,Monto,Utilidad\n" : "Nombre,Costo,Precio,Stock,Categoria\n";
+            
+            if (t === 'v') {
+                db.transacciones.forEach(x => {
+                    let cli = String(x.cli).replace(/"/g, '""');
+                    if (cli.includes(',')) cli = `"${cli}"`;
+                    c += `${x.f},${cli},${x.monto},${x.utilidad}\n`;
+                });
+            } else {
+                db.productos.forEach(x => {
+                    let nom = String(x.nombre).replace(/"/g, '""');
+                    if (nom.includes(',')) nom = `"${nom}"`;
+                    let cat = String(x.cat).replace(/"/g, '""');
+                    if (cat.includes(',')) cat = `"${cat}"`;
+                    c += `${nom},${x.costo},${x.precio},${x.stock},${cat}\n`;
+                });
+            }
+            
+            const b = new Blob(["\uFEFF" + c], { type: 'text/csv;charset=utf-8;' }); 
+            const l = document.createElement('a'); 
+            l.href = URL.createObjectURL(b); 
+            l.download = (t === 'v' ? "ventas.csv" : "stock.csv"); 
+            l.click();
+        }
+
+        function imp() {
+            const fileInput = document.getElementById('csvFile');
+            const f = fileInput.files[0];
+            if (!f) return alert("Selecciona un archivo primero");
+            
+            const enc = document.getElementById('csv-encoding').value;
+            const r = new FileReader();
+            
+            r.onload = (e) => {
+                const text = e.target.result;
+                const lines = text.split(/\r?\n/);
+                let count = 0;
+                
+                // Análisis inteligente del separador (, o ;) según la primera fila
+                const firstLine = lines[0] || "";
+                const delimiter = (firstLine.split(';').length > firstLine.split(',').length) ? ';' : ',';
+                
+                lines.forEach((l, i) => {
+                    if (i === 0 || !l.trim()) return;
+                    
+                    // Regex dinámico que respeta comillas basado en el delimitador detectado
+                    const regex = new RegExp(`${delimiter}(?=(?:(?:[^"]*"){2})*[^"]*$)`);
+                    const d = l.split(regex).map(x => x.replace(/^"|"$/g, '').trim());
+                    
+                    if (d.length >= 3) {
+                        db.productos.push({
+                            nombre: d[0] || 'Desconocido',
+                            costo: parseFloat(d[1]) || 0,
+                            precio: parseFloat(d[2]) || 0,
+                            stock: parseInt(d[3]) || 0,
+                            cat: d[4] ? d[4] : 'General'
+                        });
+                        count++;
+                    }
+                });
+                
+                save();
+                alert(`¡Éxito! Se importaron ${count} productos correctamente usando la codificación ${enc}.`);
+                
+                fileInput.value = ""; 
+                renderInventario(); 
+            };
+            r.onerror = () => alert("Error al leer el archivo.");
+            
+            // Leemos el archivo usando la codificación que elegiste en la interfaz
+            r.readAsText(f, enc); 
+        }
+
+        renderDashboard();
+        updateNav();
+    </script>
+</body>
+</html>
