@@ -103,7 +103,7 @@
                     <div class="grid grid-cols-3 gap-2">
                         <input type="number" id="p-c" placeholder="Costo" class="w-full p-2 border rounded-xl text-xs">
                         <input type="number" id="p-v" placeholder="Venta" class="w-full p-2 border rounded-xl text-xs font-bold text-blue-600">
-                        <input type="number" id="p-s" placeholder="Stock" class="w-full p-2 border rounded-xl text-xs">
+                        <input type="number" id="p-s" placeholder="Stock" step="any" class="w-full p-2 border rounded-xl text-xs">
                     </div>
                     <button onclick="addP()" class="w-full bg-blue-700 text-white mt-4 p-3 rounded-xl font-bold uppercase shadow">Guardar</button>
                 </div>
@@ -151,7 +151,7 @@
             if (nNombre.trim() !== '') p.nombre = nNombre.trim();
             if (!isNaN(parseFloat(nCosto))) p.costo = parseFloat(nCosto);
             if (!isNaN(parseFloat(nPrecio))) p.precio = parseFloat(nPrecio);
-            if (!isNaN(parseInt(nStock))) p.stock = parseInt(nStock);
+            if (!isNaN(parseFloat(nStock))) p.stock = parseFloat(nStock);
             save();
             renderInventario();
         }
@@ -160,7 +160,7 @@
             const n = document.getElementById('p-n').value.trim(), 
                   v = parseFloat(document.getElementById('p-v').value), 
                   c = parseFloat(document.getElementById('p-c').value) || 0, 
-                  s = parseInt(document.getElementById('p-s').value) || 0, 
+                  s = parseFloat(document.getElementById('p-s').value) || 0, 
                   cat = document.getElementById('p-cat').value;
             if (n && !isNaN(v)) { db.productos.push({ nombre: n, precio: v, costo: c, stock: s, cat: cat }); save(); renderInventario(); }
         }
@@ -177,7 +177,7 @@
                     <input list="list-p" id="v-d" onchange="aP()" placeholder="Buscar..." class="w-full p-4 border rounded-xl bg-gray-50 font-bold text-lg">
                     <datalist id="list-p">${opts}</datalist>
                     <div class="grid grid-cols-2 gap-2">
-                        <div class="text-center"><label class="text-[9px] uppercase font-bold text-gray-400">Cant.</label><input type="number" id="v-c" value="1" class="w-full p-3 border rounded-xl text-center font-bold"></div>
+                        <div class="text-center"><label class="text-[9px] uppercase font-bold text-gray-400">Cant.</label><input type="number" id="v-c" value="1" step="any" class="w-full p-3 border rounded-xl text-center font-bold"></div>
                         <div class="text-center"><label class="text-[9px] uppercase font-bold text-gray-400">Precio S/</label><input type="number" id="v-p" class="w-full p-3 border rounded-xl font-bold text-blue-700 text-center"></div>
                     </div>
                     <button onclick="addC()" class="w-full bg-blue-100 text-blue-800 py-4 rounded-xl font-black uppercase shadow-sm">+ AGREGAR AL CARRITO</button>
@@ -204,7 +204,7 @@
         }
         
         function addC() {
-            const d = document.getElementById('v-d').value, c = parseInt(document.getElementById('v-c').value), p = parseFloat(document.getElementById('v-p').value);
+            const d = document.getElementById('v-d').value, c = parseFloat(document.getElementById('v-c').value), p = parseFloat(document.getElementById('v-p').value);
             const ori = db.productos.find(x => x.nombre === d);
             const cost = ori ? Number(ori.costo || 0) : 0;
             if (d && c > 0) { carrito.push({ d, c, p, st: c * p, ut: (p - cost) * c }); upC(); document.getElementById('v-d').value = ''; document.getElementById('v-c').value = '1'; }
@@ -212,7 +212,7 @@
 
         function upC() {
             const l = document.getElementById('c-list'); if (!l) return;
-            l.innerHTML = carrito.map((x, i) => `<div class="flex justify-between border-b py-3 items-center"><div><b class="text-blue-900">${x.c}x</b> ${escapeHTML(x.d)}</div><div class="flex items-center"><b>S/ ${x.st.toFixed(2)}</b><button onclick="carrito.splice(${i},1);upC()" class="ml-3 text-red-300"><i class="fas fa-times-circle"></i></button></div></div>`).join('');
+            l.innerHTML = carrito.map((x, i) => `<div class="flex justify-between border-b py-3 items-center"><div><b class="text-blue-900">${x.c % 1 !== 0 ? x.c.toFixed(2) : x.c}x</b> ${escapeHTML(x.d)}</div><div class="flex items-center"><b>S/ ${x.st.toFixed(2)}</b><button onclick="carrito.splice(${i},1);upC()" class="ml-3 text-red-300"><i class="fas fa-times-circle"></i></button></div></div>`).join('');
             document.getElementById('c-tot').innerText = 'S/ ' + carrito.reduce((a, b) => a + b.st, 0).toFixed(2);
         }
 
@@ -221,14 +221,22 @@
             const cli = document.getElementById('v-cli').value || "Venta General";
             const tel = document.getElementById('v-tel').value || "";
             const totV = carrito.reduce((a, b) => a + b.st, 0), totU = carrito.reduce((a, b) => a + b.ut, 0);
-            carrito.forEach(item => { const p = db.productos.find(x => x.nombre === item.d); if (p) p.stock -= item.c; });
+            
+            // Deducción de stock con corrección de punto flotante
+            carrito.forEach(item => { 
+                const p = db.productos.find(x => x.nombre === item.d); 
+                if (p) p.stock = Math.round((p.stock - item.c) * 100) / 100; 
+            });
+            
             db.transacciones.push({ f: new Date().toLocaleString(), monto: totV, utilidad: totU, tipo: 'Venta', metodo: m, cli: cli });
             if (m === 'Fíado') db.deudas.push({ cli, tel, monto: totV, utilidad: totU, f: new Date().toLocaleDateString(), detalle: carrito.map(x => `${x.c} ${x.d}`).join(', ') });
+            
             document.getElementById('t-fecha').innerText = new Date().toLocaleString();
             document.getElementById('t-tipo-pago').innerText = m.toUpperCase();
             document.getElementById('t-cliente').innerText = escapeHTML(cli);
             document.getElementById('t-total').innerText = totV.toFixed(2);
-            document.getElementById('t-items-print').innerHTML = carrito.map(x => `<tr><td>${x.c}</td><td>${escapeHTML(x.d)}</td><td class="text-right">${x.st.toFixed(2)}</td></tr>`).join('');
+            document.getElementById('t-items-print').innerHTML = carrito.map(x => `<tr><td>${x.c % 1 !== 0 ? x.c.toFixed(2) : x.c}</td><td>${escapeHTML(x.d)}</td><td class="text-right">${x.st.toFixed(2)}</td></tr>`).join('');
+            
             save(); window.print();
             carrito = []; renderDashboard();
         }
@@ -347,14 +355,12 @@
                 const lines = text.split(/\r?\n/);
                 let count = 0;
                 
-                // Análisis inteligente del separador (, o ;) según la primera fila
                 const firstLine = lines[0] || "";
                 const delimiter = (firstLine.split(';').length > firstLine.split(',').length) ? ';' : ',';
                 
                 lines.forEach((l, i) => {
                     if (i === 0 || !l.trim()) return;
                     
-                    // Regex dinámico que respeta comillas basado en el delimitador detectado
                     const regex = new RegExp(`${delimiter}(?=(?:(?:[^"]*"){2})*[^"]*$)`);
                     const d = l.split(regex).map(x => x.replace(/^"|"$/g, '').trim());
                     
@@ -363,7 +369,7 @@
                             nombre: d[0] || 'Desconocido',
                             costo: parseFloat(d[1]) || 0,
                             precio: parseFloat(d[2]) || 0,
-                            stock: parseInt(d[3]) || 0,
+                            stock: parseFloat(d[3]) || 0,
                             cat: d[4] ? d[4] : 'General'
                         });
                         count++;
@@ -378,7 +384,6 @@
             };
             r.onerror = () => alert("Error al leer el archivo.");
             
-            // Leemos el archivo usando la codificación que elegiste en la interfaz
             r.readAsText(f, enc); 
         }
 
